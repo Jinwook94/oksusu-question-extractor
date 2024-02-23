@@ -1,0 +1,294 @@
+./build.gradle
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.2.3'
+    id 'io.spring.dependency-management' version '1.1.4'
+}
+
+group = 'org'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    sourceCompatibility = '17'
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'io.projectreactor:reactor-core'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jdbc'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    compileOnly 'org.projectlombok:lombok'
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+    runtimeOnly 'com.h2database:h2'
+    annotationProcessor 'org.projectlombok:lombok'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+    runtimeOnly 'io.netty:netty-resolver-dns-native-macos:4.1.68.Final:osx-x86_64'
+    implementation 'org.apache.poi:poi:5.2.2'
+    implementation 'org.apache.poi:poi-ooxml:5.2.2'
+    implementation 'org.apache.pdfbox:pdfbox:2.0.24'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+./src/test/java/org/oksusubackend/OksusuBackendApplicationTests.java
+package org.oksusubackend;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+
+@SpringBootTest
+class OksusuBackendApplicationTests {
+
+    @Test
+    void contextLoads() {
+    }
+
+}
+./src/main/java/org/oksusubackend/dto/GptRequest.java
+package org.oksusubackend.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+
+import java.util.List;
+
+@Getter
+@AllArgsConstructor
+public class GptRequest {
+    private String model;
+    private List<Message> messages;
+
+    @Getter
+    @AllArgsConstructor
+    public static class Message {
+        private String role;
+        private String content;
+    }
+}
+./src/main/java/org/oksusubackend/dto/GptResponse.java
+package org.oksusubackend.dto;
+
+import lombok.Getter;
+
+import java.util.List;
+
+@Getter
+public class GptResponse {
+    private List<Choice> choices;
+
+    @Getter
+    public static class Choice {
+        private Message message;
+    }
+
+    @Getter
+    public static class Message {
+        private String content;
+    }
+}
+./src/main/java/org/oksusubackend/util/FileContentExtractor.java
+package org.oksusubackend.util;
+
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+
+public class FileContentExtractor {
+
+    public static String extractContent(MultipartFile file) {
+        try {
+            String fileName = file.getOriginalFilename();
+            if (fileName != null && fileName.toLowerCase().endsWith(".pdf")) {
+                return extractPdfContent(file.getInputStream());
+            } else if (fileName != null && (fileName.toLowerCase().endsWith(".xlsx") || fileName.toLowerCase().endsWith(".xls"))) {
+                return extractExcelContent(file.getInputStream());
+            } else if (fileName != null && fileName.toLowerCase().endsWith(".txt")) {
+                return extractTextContent(file.getInputStream());
+            } else {
+                return "Unsupported file type";
+            }
+        } catch (IOException e) {
+            return "Error extracting file content: " + e.getMessage();
+        }
+    }
+
+    private static String extractPdfContent(InputStream inputStream) throws IOException {
+        try (PDDocument document = PDDocument.load(inputStream)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            return stripper.getText(document);
+        }
+    }
+
+    private static String extractExcelContent(InputStream inputStream) throws IOException {
+        StringBuilder builder = new StringBuilder();
+        try (Workbook workbook = new XSSFWorkbook(inputStream)) {
+            for (int sheetNum = 0; sheetNum < workbook.getNumberOfSheets(); sheetNum++) {
+                Sheet sheet = workbook.getSheetAt(sheetNum);
+                for (Row row : sheet) {
+                    for (Cell cell : row) {
+                        builder.append(cell.toString()).append("\t");
+                    }
+                    builder.append("\n");
+                }
+            }
+        }
+        return builder.toString();
+    }
+
+    private static String extractTextContent(InputStream inputStream) throws IOException {
+        StringBuilder textBuilder = new StringBuilder();
+        try (BufferedInputStream bufferedInputStream = new BufferedInputStream(inputStream)) {
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+            while ((bytesRead = bufferedInputStream.read(buffer)) != -1) {
+                textBuilder.append(new String(buffer, 0, bytesRead));
+            }
+        }
+        return textBuilder.toString();
+    }
+}
+./src/main/java/org/oksusubackend/config/OpenAiConfig.java
+package org.oksusubackend.config;
+
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+
+@Setter
+@Getter
+@Configuration
+@ConfigurationProperties(prefix = "openai")
+public class OpenAiConfig {
+
+    private final String apiKey = "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";
+
+}./src/main/java/org/oksusubackend/controller/FileUploadController.java
+package org.oksusubackend.controller;
+
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+import org.oksusubackend.service.FileAnalysisService;
+import reactor.core.publisher.Mono;
+
+@RestController
+@RequestMapping("/api/files")
+public class FileUploadController {
+
+    private final FileAnalysisService fileAnalysisService;
+
+    public FileUploadController(FileAnalysisService fileAnalysisService) {
+        this.fileAnalysisService = fileAnalysisService;
+    }
+
+    @PostMapping("/upload")
+    public Mono<String> uploadFile(@RequestParam("file") MultipartFile file) {
+        return fileAnalysisService.analyzeFileAndGenerateQuestions(file);
+    }
+}
+./src/main/java/org/oksusubackend/OksusuBackendApplication.java
+package org.oksusubackend;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class OksusuBackendApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(OksusuBackendApplication.class, args);
+    }
+
+}
+./src/main/java/org/oksusubackend/service/GptService.java
+package org.oksusubackend.service;
+
+import org.oksusubackend.config.OpenAiConfig;
+import org.oksusubackend.dto.GptRequest;
+import org.oksusubackend.dto.GptResponse;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+
+import java.util.List;
+
+@Service
+public class GptService {
+
+    private final OpenAiConfig openAiConfig;
+    private final WebClient webClient;
+
+    private static final String OPENAI_API_ENDPOINT = "https://api.openai.com/v1/chat/completions";
+    private static final String MODEL = "gpt-3.5-turbo-1106";
+    private static final String ROLE_SYSTEM = "system";
+    private static final String ROLE_USER = "user";
+    private static final String SYSTEM_MESSAGE = "You are a helpful assistant.";
+
+    public GptService(OpenAiConfig openAiConfig) {
+        this.openAiConfig = openAiConfig;
+        this.webClient = WebClient.builder()
+                .baseUrl(OPENAI_API_ENDPOINT)
+                .defaultHeader("Authorization", "Bearer " + this.openAiConfig.getApiKey())
+                .defaultHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+                .defaultHeader("Accept", MediaType.APPLICATION_JSON_VALUE)
+                .build();
+    }
+
+    public Mono<String> sendRequestToOpenAI(String text) {
+        GptRequest.Message systemMessage = new GptRequest.Message(ROLE_SYSTEM, SYSTEM_MESSAGE);
+        GptRequest.Message userMessage = new GptRequest.Message(ROLE_USER, text);
+
+        GptRequest gptRequest = new GptRequest(MODEL, List.of(systemMessage, userMessage));
+
+        return this.webClient.post()
+                .bodyValue(gptRequest)
+                .retrieve()
+                .bodyToMono(GptResponse.class)
+                .map(gptResponse -> gptResponse.getChoices().get(0).getMessage().getContent());
+    }
+}
+./src/main/java/org/oksusubackend/service/FileAnalysisService.java
+package org.oksusubackend.service;
+
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+import org.oksusubackend.util.FileContentExtractor;
+import reactor.core.publisher.Mono;
+
+@Service
+public class FileAnalysisService {
+
+    private final GptService gptService;
+
+    public FileAnalysisService(GptService gptService) {
+        this.gptService = gptService;
+    }
+
+    public Mono<String> analyzeFileAndGenerateQuestions(MultipartFile file) {
+        String content = FileContentExtractor.extractContent(file);
+        System.out.println(content);
+        return gptService.sendRequestToOpenAI(content)
+                .map(response -> "분석된 내용에 기반한 질문: " + response);
+    }
+}
