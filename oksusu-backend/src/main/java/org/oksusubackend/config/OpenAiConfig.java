@@ -11,6 +11,6 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "openai")
 public class OpenAiConfig {
 
-    private final String apiKey = "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";
+    private final String apiKey = "Open AI API Key - OpenAI 설정 페이지에서 확인";
 
 }
