@@ -14,7 +14,7 @@
     "@tabler/icons-react": "^2.47.0",
     "@types/antd": "^1.0.0",
     "@types/styled-components": "^5.1.34",
-    "antd": "^5.14.1",
+    "antd": "^5.14.2",
     "axios": "^1.6.7",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.1.3",
